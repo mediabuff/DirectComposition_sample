@@ -3,8 +3,27 @@
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
+struct ComException
+{
+	HRESULT result;
+
+	ComException(HRESULT const value) : result(value)
+	{}
+};
+
+static void HR(HRESULT const result)
+{
+	if (S_OK != result)
+	{
+		throw ComException(result);
+	}
+}
+
 struct SampleWindow : Window<SampleWindow>
 {
+	float m_dpiX = 0.0f;
+	float m_dpiY = 0.0f;
+
 	SampleWindow()
 	{
 		CreateDesktopWindow();
@@ -45,14 +64,20 @@ struct SampleWindow : Window<SampleWindow>
 	{
 		if (WM_ERASEBKGND == message)
 		{
-			TRACE(L"WM_ERASEBKGND\n");
 			EraseBackgroundHandler(wparam);
 			return 1;
 		}
 		else if (WM_PAINT == message)
 		{
-			TRACE(L"WM_PAINT\n");
 			PaintHandler();
+		}
+		else if (WM_DPICHANGED == message)
+		{
+			DpiChangedHandler(wparam);
+		}
+		else if (WM_CREATE == message)
+		{
+			CreateHandler();
 		}
 		else
 		{
@@ -62,6 +87,29 @@ struct SampleWindow : Window<SampleWindow>
 		return 0;
 	}
 
+	void DpiChangedHandler(WPARAM const wparam)
+	{
+		m_dpiX = LOWORD(wparam);
+		m_dpiY = HIWORD(wparam);
+
+		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
+	}
+
+	void CreateHandler()
+	{
+		HMONITOR const monitor = MonitorFromWindow(m_window,
+			MONITOR_DEFAULTTONEAREST);
+
+		unsigned dpiX = 0;
+		unsigned dpiY = 0;
+
+		HR(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY));
+
+		m_dpiX = static_cast<float>(dpiX);
+		m_dpiY = static_cast<float>(dpiY);
+
+		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
+	}
 	void PaintHandler()
 	{
 		VERIFY(ValidateRect(m_window, nullptr));

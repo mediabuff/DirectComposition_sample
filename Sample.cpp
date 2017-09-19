@@ -3,6 +3,9 @@
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
+static float const WindowWidth = 600.0f;
+static float const WindowHeight = 400.0f;
+
 struct ComException
 {
 	HRESULT result;
@@ -17,6 +20,20 @@ static void HR(HRESULT const result)
 	{
 		throw ComException(result);
 	}
+}
+
+template <typename T>
+static float PhysicalToLogical(T const pixel,
+	float const dpi)
+{
+	return pixel * 96.0f / dpi;
+}
+
+template <typename T>
+static float LogicalToPhysical(T const pixel,
+	float const dpi)
+{
+	return pixel * dpi / 96.0f;
 }
 
 struct SampleWindow : Window<SampleWindow>
@@ -73,7 +90,8 @@ struct SampleWindow : Window<SampleWindow>
 		}
 		else if (WM_DPICHANGED == message)
 		{
-			DpiChangedHandler(wparam);
+			TRACE(L"WM_DPICHANGED\n");
+			DpiChangedHandler(wparam, lparam);
 		}
 		else if (WM_CREATE == message)
 		{
@@ -87,12 +105,22 @@ struct SampleWindow : Window<SampleWindow>
 		return 0;
 	}
 
-	void DpiChangedHandler(WPARAM const wparam)
+	void DpiChangedHandler(WPARAM const wparam, LPARAM const lparam)
 	{
 		m_dpiX = LOWORD(wparam);
 		m_dpiY = HIWORD(wparam);
 
 		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
+
+		RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
+
+		VERIFY(SetWindowPos(m_window,
+			nullptr,
+			suggested->left,
+			suggested->top,
+			suggested->right - suggested->left,
+			suggested->bottom - suggested->top,
+			SWP_NOACTIVATE | SWP_NOZORDER));
 	}
 
 	void CreateHandler()
@@ -109,9 +137,41 @@ struct SampleWindow : Window<SampleWindow>
 		m_dpiY = static_cast<float>(dpiY);
 
 		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
+
+		RECT rect =
+		{
+			0,
+			0,
+			static_cast<unsigned>(LogicalToPhysical(WindowWidth, m_dpiX)),
+			static_cast<unsigned>(LogicalToPhysical(WindowHeight, m_dpiY))
+		};
+
+		VERIFY(AdjustWindowRect(&rect,
+			GetWindowLong(m_window, GWL_STYLE),
+			false));
+
+		VERIFY(SetWindowPos(m_window,
+			nullptr,
+			0, 0,
+			rect.right - rect.left,
+			rect.bottom - rect.top,
+			SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER));
+
+		TRACE(L"Adjusted %d %d %d %d\n",
+			rect.left,
+			rect.top,
+			rect.right - rect.left,
+			rect.bottom - rect.top);
 	}
 	void PaintHandler()
 	{
+		RECT rect = {};
+		VERIFY(GetClientRect(m_window, &rect));
+
+		TRACE(L"Client size: %.2f %.2f\n",
+			PhysicalToLogical(rect.right, m_dpiX),
+			PhysicalToLogical(rect.bottom, m_dpiY));
+
 		VERIFY(ValidateRect(m_window, nullptr));
 	}
 

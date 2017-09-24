@@ -1,6 +1,8 @@
 #include "Precompiled.h"
 #include "Window.h"
 
+using namespace Microsoft::WRL;
+
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 static float const WindowWidth = 600.0f;
@@ -38,8 +40,14 @@ static float LogicalToPhysical(T const pixel,
 
 struct SampleWindow : Window<SampleWindow>
 {
+	// Device independent resources
 	float m_dpiX = 0.0f;
 	float m_dpiY = 0.0f;
+
+	// Device resources
+	ComPtr<ID3D11Device> m_device3D;
+	ComPtr<IDCompositionDevice> m_device;
+	ComPtr<IDCompositionTarget> m_target;
 
 	SampleWindow()
 	{
@@ -54,7 +62,6 @@ struct SampleWindow : Window<SampleWindow>
 		wc.lpszClassName = L"SampleWindow";
 		wc.style = CS_HREDRAW | CS_VREDRAW;
 		wc.lpfnWndProc = WndProc;
-		wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
 
 		RegisterClass(&wc);
 
@@ -75,22 +82,83 @@ struct SampleWindow : Window<SampleWindow>
 		ASSERT(m_window);
 	}
 
+	bool IsDeviceCreated() const
+	{
+		return m_device3D;
+	}
+
+	void ReleaseDeviceResources()
+	{
+		m_device3D.Reset();
+	}
+
+	void CreateDevice3D()
+	{
+		ASSERT(!IsDeviceCreated());
+
+		unsigned flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT |
+			D3D11_CREATE_DEVICE_SINGLETHREADED;
+		#ifdef _DEBUG
+		flags |= D3D11_CREATE_DEVICE_DEBUG;
+		#endif
+
+		HR(D3D11CreateDevice(nullptr,
+			D3D_DRIVER_TYPE_HARDWARE,
+			nullptr,
+			flags,
+			nullptr, 0,
+			D3D11_SDK_VERSION,
+			m_device3D.GetAddressOf(),
+			nullptr,
+			nullptr));
+	}
+
+	ComPtr<ID2D1Device> CreateDevice2D()
+	{
+		ComPtr<IDXGIDevice3> deviceX;
+		HR(m_device3D.As(&deviceX));
+
+		D2D1_CREATION_PROPERTIES properties = {};
+#ifdef _DEBUG
+		properties.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
+#endif
+
+		ComPtr<ID2D1Device> device2D;
+
+		HR(D2D1CreateDevice(deviceX.Get(),
+			properties,
+			device2D.GetAddressOf()));
+
+		return device2D;
+	}
+
+	void CreateDeviceResources()
+	{
+		ASSERT(!IsDeviceCreated());
+
+		CreateDevice3D();
+
+		ComPtr<ID2D1Device> const device2D = CreateDevice2D();
+
+		HR(DCompositionCreateDevice2(device2D.Get(),
+			__uuidof(m_device),
+			reinterpret_cast<void **>(m_device.ReleaseAndGetAddressOf())));
+
+		HR(m_device->CreateTargetForHwnd(m_window,
+			true,
+			m_target.ReleaseAndGetAddressOf()));
+	}
+
 	LRESULT MessageHandler(UINT const message,
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_ERASEBKGND == message)
-		{
-			EraseBackgroundHandler(wparam);
-			return 1;
-		}
-		else if (WM_PAINT == message)
+		if (WM_PAINT == message)
 		{
 			PaintHandler();
 		}
 		else if (WM_DPICHANGED == message)
 		{
-			TRACE(L"WM_DPICHANGED\n");
 			DpiChangedHandler(wparam, lparam);
 		}
 		else if (WM_CREATE == message)
@@ -109,8 +177,6 @@ struct SampleWindow : Window<SampleWindow>
 	{
 		m_dpiX = LOWORD(wparam);
 		m_dpiY = HIWORD(wparam);
-
-		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
 
 		RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
 
@@ -136,8 +202,6 @@ struct SampleWindow : Window<SampleWindow>
 		m_dpiX = static_cast<float>(dpiX);
 		m_dpiY = static_cast<float>(dpiY);
 
-		TRACE(L"DPI %.2f %.2f\n", m_dpiX, m_dpiY);
-
 		RECT rect =
 		{
 			0,
@@ -156,23 +220,30 @@ struct SampleWindow : Window<SampleWindow>
 			rect.right - rect.left,
 			rect.bottom - rect.top,
 			SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER));
-
-		TRACE(L"Adjusted %d %d %d %d\n",
-			rect.left,
-			rect.top,
-			rect.right - rect.left,
-			rect.bottom - rect.top);
 	}
+
 	void PaintHandler()
 	{
-		RECT rect = {};
-		VERIFY(GetClientRect(m_window, &rect));
+		try
+		{
+			if (IsDeviceCreated())
+			{
+				HR(m_device3D->GetDeviceRemovedReason());
 
-		TRACE(L"Client size: %.2f %.2f\n",
-			PhysicalToLogical(rect.right, m_dpiX),
-			PhysicalToLogical(rect.bottom, m_dpiY));
+			}
+			else
+			{
+				CreateDeviceResources();
+			}
 
-		VERIFY(ValidateRect(m_window, nullptr));
+			VERIFY(ValidateRect(m_window, nullptr));
+		}
+		catch (ComException const & e)
+		{
+			TRACE(L"PaintHandler failed 0x%X\n", e.result);
+
+			ReleaseDeviceResources();
+		}
 	}
 
 	void EraseBackgroundHandler(WPARAM const wparam)

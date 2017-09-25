@@ -2,6 +2,7 @@
 #include "Window.h"
 
 using namespace Microsoft::WRL;
+using namespace D2D1;
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -67,7 +68,7 @@ struct SampleWindow : Window<SampleWindow>
 
 		ASSERT(!m_window);
 
-		VERIFY(CreateWindowEx(0,
+		VERIFY(CreateWindowEx(WS_EX_NOREDIRECTIONBITMAP,
 			wc.lpszClassName,
 			L"Sample Window",
 			WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -132,6 +133,32 @@ struct SampleWindow : Window<SampleWindow>
 		return device2D;
 	}
 
+	ComPtr<IDCompositionVisual2> CreateVisual()
+	{
+		ComPtr<IDCompositionVisual2> visual;
+
+		//HR(m_device->CreateVisual(reinterpret_cast<IDCompositionVisual**>(visual.GetAddressOf())));
+		HR(m_device->CreateVisual((IDCompositionVisual**)visual.GetAddressOf()));
+
+		return visual;
+	}
+
+	template <typename T>
+	ComPtr<IDCompositionSurface> CreateSurface(T const width,
+		T const height)
+	{
+		ComPtr<IDCompositionSurface> surface;
+
+		HR(m_device->CreateSurface(
+			static_cast<unsigned>(width),
+			static_cast<unsigned>(height),
+			DXGI_FORMAT_B8G8R8A8_UNORM,
+			DXGI_ALPHA_MODE_PREMULTIPLIED,
+			surface.GetAddressOf()));
+
+		return surface;
+	}
+
 	void CreateDeviceResources()
 	{
 		ASSERT(!IsDeviceCreated());
@@ -147,6 +174,48 @@ struct SampleWindow : Window<SampleWindow>
 		HR(m_device->CreateTargetForHwnd(m_window,
 			true,
 			m_target.ReleaseAndGetAddressOf()));
+
+		ComPtr<IDCompositionVisual2> visual = CreateVisual();
+
+		HR(m_target->SetRoot(visual.Get()));
+
+		ComPtr<IDCompositionSurface> surface = CreateSurface(
+			LogicalToPhysical(100, m_dpiX),
+			LogicalToPhysical(100, m_dpiY));
+
+		HR(visual->SetContent(surface.Get()));
+
+		ComPtr<ID2D1DeviceContext> dc;
+		POINT offset = {};
+
+		HR(surface->BeginDraw(nullptr,
+			__uuidof(dc),
+			reinterpret_cast<void **>(dc.GetAddressOf()),
+			&offset));
+
+		dc->SetDpi(m_dpiX, m_dpiY);
+
+		dc->SetTransform(Matrix3x2F::Translation(
+			PhysicalToLogical(offset.x, m_dpiX),
+			PhysicalToLogical(offset.y, m_dpiY)));
+		
+		dc->Clear();
+
+		ComPtr<ID2D1SolidColorBrush> brush;
+		D2D1_COLOR_F const color = ColorF(1.0f, 0.5f, 0.0f);
+
+		HR(dc->CreateSolidColorBrush(color,
+			brush.GetAddressOf()));
+
+		D2D1_ELLIPSE ellipse = Ellipse(Point2F(50.0f, 50.0f),
+			50.0f,
+			50.0f);
+
+		dc->FillEllipse(ellipse, brush.Get());
+
+		HR(surface->EndDraw());
+
+		HR(m_device->Commit());
 	}
 
 	LRESULT MessageHandler(UINT const message,
@@ -206,8 +275,8 @@ struct SampleWindow : Window<SampleWindow>
 		{
 			0,
 			0,
-			static_cast<unsigned>(LogicalToPhysical(WindowWidth, m_dpiX)),
-			static_cast<unsigned>(LogicalToPhysical(WindowHeight, m_dpiY))
+			static_cast<LONG>(LogicalToPhysical(WindowWidth, m_dpiX)),
+			static_cast<LONG>(LogicalToPhysical(WindowHeight, m_dpiY))
 		};
 
 		VERIFY(AdjustWindowRect(&rect,

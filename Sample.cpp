@@ -180,11 +180,65 @@ struct SampleWindow : Window<SampleWindow>
 		m_pointerVisual = CreateVisual();
 		m_backgroundVisual = CreateVisual();
 
-		HR(m_target->SetRoot(m_pointerVisual.Get()));
+		HR(m_backgroundVisual->AddVisual(m_pointerVisual.Get(), false, nullptr));
+
+		HR(m_target->SetRoot(m_backgroundVisual.Get()));
 
 		CreateDeviceScaleResources();
+		CreateDeviceSizeResources();
 
 		HR(m_device->Commit());
+	}
+
+	void CreateDeviceSizeResources()
+	{
+		RECT rect = {};
+		VERIFY(GetClientRect(m_window, &rect));
+
+		ComPtr<IDCompositionSurface> surface = CreateSurface(
+			rect.right - rect.left,
+			rect.bottom - rect.top);
+
+		HR(m_backgroundVisual->SetContent(surface.Get()));
+
+		ComPtr<ID2D1DeviceContext> dc;
+		POINT offset = {};
+
+		HR(surface->BeginDraw(nullptr,
+			__uuidof(dc),
+			reinterpret_cast<void **>(dc.GetAddressOf()),
+			&offset));
+
+		dc->SetDpi(m_dpiX, m_dpiY);
+
+		dc->SetTransform(Matrix3x2F::Translation(PhysicalToLogical(offset.x, m_dpiX),
+			PhysicalToLogical(offset.y, m_dpiY)));
+
+		dc->Clear(ColorF(1.0f, 1.0f, 1.0f, 0.8f));
+
+		// draw some border
+		ComPtr<ID2D1SolidColorBrush> brush;
+
+		D2D1_COLOR_F const color = ColorF(0.0f, 0.5f, 1.0f);
+
+		HR(dc->CreateSolidColorBrush(color, brush.GetAddressOf()));
+
+		D2D1_SIZE_F const size =
+		{
+			PhysicalToLogical(rect.right - rect.left, m_dpiX),
+			PhysicalToLogical(rect.bottom - rect.top, m_dpiY)
+		};
+
+		float const margin = 50.0f;
+
+		D2D1_RECT_F const border = RectF(margin,
+			margin,
+			size.width - margin,
+			size.height - margin);
+
+		dc->DrawRectangle(border, brush.Get(), 20.0f);
+
+		HR(surface->EndDraw());
 	}
 
 	void CreateDeviceScaleResources()
@@ -230,7 +284,15 @@ struct SampleWindow : Window<SampleWindow>
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_MOUSEMOVE == message)
+		if (WM_SIZE == message)
+		{
+			SizeHandler();
+		}
+		else if (WM_GETMINMAXINFO == message)
+		{
+			MinMaxHandler(lparam);
+		}
+		else if (WM_MOUSEMOVE == message)
 		{
 			MouseMoveHandler(lparam);
 		}
@@ -252,6 +314,32 @@ struct SampleWindow : Window<SampleWindow>
 		}
 
 		return 0;
+	}
+
+	void MinMaxHandler(LPARAM const lparam)
+	{
+		MINMAXINFO * info = reinterpret_cast<MINMAXINFO*>(lparam);
+
+		info->ptMinTrackSize.y = info->ptMinTrackSize.x;
+	}
+
+	void SizeHandler()
+	{
+		try
+		{
+			if (!IsDeviceCreated())
+				return;
+
+			CreateDeviceSizeResources();
+
+			HR(m_device->Commit());
+		}
+		catch (ComException const &e)
+		{
+			TRACE(L"SizeHandler failed 0x%X\n", e.result);
+
+			ReleaseDeviceResources();
+		}
 	}
 
 	void MouseMoveHandler(LPARAM const lparam)
@@ -305,6 +393,7 @@ struct SampleWindow : Window<SampleWindow>
 				return;
 
 			CreateDeviceScaleResources();
+			CreateDeviceSizeResources();
 
 			HR(m_device->Commit());
 		}

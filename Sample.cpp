@@ -49,6 +49,8 @@ struct SampleWindow : Window<SampleWindow>
 	ComPtr<ID3D11Device> m_device3D;
 	ComPtr<IDCompositionDevice> m_device;
 	ComPtr<IDCompositionTarget> m_target;
+	ComPtr<IDCompositionVisual2> m_pointerVisual;
+	ComPtr<IDCompositionVisual2> m_backgroundVisual;
 
 	SampleWindow()
 	{
@@ -175,15 +177,23 @@ struct SampleWindow : Window<SampleWindow>
 			true,
 			m_target.ReleaseAndGetAddressOf()));
 
-		ComPtr<IDCompositionVisual2> visual = CreateVisual();
+		m_pointerVisual = CreateVisual();
+		m_backgroundVisual = CreateVisual();
 
-		HR(m_target->SetRoot(visual.Get()));
+		HR(m_target->SetRoot(m_pointerVisual.Get()));
 
+		CreateDeviceScaleResources();
+
+		HR(m_device->Commit());
+	}
+
+	void CreateDeviceScaleResources()
+	{
 		ComPtr<IDCompositionSurface> surface = CreateSurface(
 			LogicalToPhysical(100, m_dpiX),
 			LogicalToPhysical(100, m_dpiY));
 
-		HR(visual->SetContent(surface.Get()));
+		HR(m_pointerVisual->SetContent(surface.Get()));
 
 		ComPtr<ID2D1DeviceContext> dc;
 		POINT offset = {};
@@ -198,7 +208,7 @@ struct SampleWindow : Window<SampleWindow>
 		dc->SetTransform(Matrix3x2F::Translation(
 			PhysicalToLogical(offset.x, m_dpiX),
 			PhysicalToLogical(offset.y, m_dpiY)));
-		
+
 		dc->Clear();
 
 		ComPtr<ID2D1SolidColorBrush> brush;
@@ -214,15 +224,17 @@ struct SampleWindow : Window<SampleWindow>
 		dc->FillEllipse(ellipse, brush.Get());
 
 		HR(surface->EndDraw());
-
-		HR(m_device->Commit());
 	}
 
 	LRESULT MessageHandler(UINT const message,
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_PAINT == message)
+		if (WM_MOUSEMOVE == message)
+		{
+			MouseMoveHandler(lparam);
+		}
+		else if (WM_PAINT == message)
 		{
 			PaintHandler();
 		}
@@ -242,20 +254,68 @@ struct SampleWindow : Window<SampleWindow>
 		return 0;
 	}
 
+	void MouseMoveHandler(LPARAM const lparam)
+	{
+		try
+		{
+			if (!IsDeviceCreated())
+				return;
+
+			float x = LOWORD(lparam);
+			float y = HIWORD(lparam);
+
+			x -= LogicalToPhysical(50, m_dpiX);
+			y -= LogicalToPhysical(50, m_dpiY);
+
+			HR(m_pointerVisual->SetOffsetX(x));
+			HR(m_pointerVisual->SetOffsetY(y));
+
+			HR(m_device->Commit());
+		}
+		catch (ComException const &e)
+		{
+			TRACE(L"MouseMoveHandler failed 0x%X\n", e.result);
+
+			ReleaseDeviceResources();
+
+			VERIFY(InvalidateRect(m_window,
+				nullptr,
+				false));
+		}
+	}
+
 	void DpiChangedHandler(WPARAM const wparam, LPARAM const lparam)
 	{
-		m_dpiX = LOWORD(wparam);
-		m_dpiY = HIWORD(wparam);
+		try
+		{
+			m_dpiX = LOWORD(wparam);
+			m_dpiY = HIWORD(wparam);
 
-		RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
+			RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
 
-		VERIFY(SetWindowPos(m_window,
-			nullptr,
-			suggested->left,
-			suggested->top,
-			suggested->right - suggested->left,
-			suggested->bottom - suggested->top,
-			SWP_NOACTIVATE | SWP_NOZORDER));
+			VERIFY(SetWindowPos(m_window,
+				nullptr,
+				suggested->left,
+				suggested->top,
+				suggested->right - suggested->left,
+				suggested->bottom - suggested->top,
+				SWP_NOACTIVATE | SWP_NOZORDER));
+
+			if (!IsDeviceCreated())
+				return;
+
+			CreateDeviceScaleResources();
+
+			HR(m_device->Commit());
+		}
+		catch (ComException const &e)
+		{
+			TRACE(L"DpiChangedHandler failed 0x%X\n", e.result);
+
+			ReleaseDeviceResources();
+
+			VERIFY(InvalidateRect(m_window, nullptr, false));
+		}
 	}
 
 	void CreateHandler()

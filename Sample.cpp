@@ -177,29 +177,17 @@ struct SampleWindow : Window<SampleWindow>
 			true,
 			m_target.ReleaseAndGetAddressOf()));
 
+		ComPtr<IDCompositionVisual2> rootVisual = CreateVisual();
 		m_pointerVisual = CreateVisual();
 		m_backgroundVisual = CreateVisual();
 
-		HR(m_backgroundVisual->AddVisual(m_pointerVisual.Get(), false, nullptr));
+		HR(rootVisual->AddVisual(m_backgroundVisual.Get(), false, nullptr));
 
-		HR(m_target->SetRoot(m_backgroundVisual.Get()));
+		HR(rootVisual->AddVisual(m_pointerVisual.Get(), false, nullptr));
 
-		CreateDeviceScaleResources();
-		CreateDeviceSizeResources();
+		HR(m_target->SetRoot(rootVisual.Get()));
 
-		HR(m_device->Commit());
-	}
-
-	void CreateDeviceSizeResources()
-	{
-		RECT rect = {};
-		VERIFY(GetClientRect(m_window, &rect));
-
-		ComPtr<IDCompositionSurface> surface = CreateSurface(
-			rect.right - rect.left,
-			rect.bottom - rect.top);
-
-		HR(m_backgroundVisual->SetContent(surface.Get()));
+		ComPtr<IDCompositionSurface> surface = CreateSurface(1, 1);
 
 		ComPtr<ID2D1DeviceContext> dc;
 		POINT offset = {};
@@ -209,36 +197,29 @@ struct SampleWindow : Window<SampleWindow>
 			reinterpret_cast<void **>(dc.GetAddressOf()),
 			&offset));
 
-		dc->SetDpi(m_dpiX, m_dpiY);
-
-		dc->SetTransform(Matrix3x2F::Translation(PhysicalToLogical(offset.x, m_dpiX),
-			PhysicalToLogical(offset.y, m_dpiY)));
-
-		dc->Clear(ColorF(1.0f, 1.0f, 1.0f, 0.8f));
-
-		// draw some border
-		ComPtr<ID2D1SolidColorBrush> brush;
-
-		D2D1_COLOR_F const color = ColorF(0.0f, 0.5f, 1.0f);
-
-		HR(dc->CreateSolidColorBrush(color, brush.GetAddressOf()));
-
-		D2D1_SIZE_F const size =
-		{
-			PhysicalToLogical(rect.right - rect.left, m_dpiX),
-			PhysicalToLogical(rect.bottom - rect.top, m_dpiY)
-		};
-
-		float const margin = 50.0f;
-
-		D2D1_RECT_F const border = RectF(margin,
-			margin,
-			size.width - margin,
-			size.height - margin);
-
-		dc->DrawRectangle(border, brush.Get(), 20.0f);
+		dc->Clear(ColorF(0.0f, 0.5f, 1.0f, 0.5f));
 
 		HR(surface->EndDraw());
+
+		HR(m_backgroundVisual->SetContent(surface.Get()));
+
+		ScaleBackground();
+
+		CreateDeviceScaleResources();
+
+		HR(m_device->Commit());
+	}
+
+	void ScaleBackground()
+	{
+		RECT rect = {};
+		VERIFY(GetClientRect(m_window, &rect));
+
+		HR(m_backgroundVisual->SetTransform(
+			Matrix3x2F::Scale(
+				static_cast<float>(rect.right),
+				static_cast<float>(rect.bottom))
+		));
 	}
 
 	void CreateDeviceScaleResources()
@@ -330,7 +311,7 @@ struct SampleWindow : Window<SampleWindow>
 			if (!IsDeviceCreated())
 				return;
 
-			CreateDeviceSizeResources();
+			ScaleBackground();
 
 			HR(m_device->Commit());
 		}
@@ -393,7 +374,6 @@ struct SampleWindow : Window<SampleWindow>
 				return;
 
 			CreateDeviceScaleResources();
-			CreateDeviceSizeResources();
 
 			HR(m_device->Commit());
 		}

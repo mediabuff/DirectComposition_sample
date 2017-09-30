@@ -49,8 +49,6 @@ struct SampleWindow : Window<SampleWindow>
 	ComPtr<ID3D11Device> m_device3D;
 	ComPtr<IDCompositionDevice> m_device;
 	ComPtr<IDCompositionTarget> m_target;
-	ComPtr<IDCompositionVisual2> m_pointerVisual;
-	ComPtr<IDCompositionVisual2> m_backgroundVisual;
 
 	SampleWindow()
 	{
@@ -73,7 +71,7 @@ struct SampleWindow : Window<SampleWindow>
 		VERIFY(CreateWindowEx(WS_EX_NOREDIRECTIONBITMAP,
 			wc.lpszClassName,
 			L"Sample Window",
-			WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+			WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 			CW_USEDEFAULT, CW_USEDEFAULT,
 			CW_USEDEFAULT, CW_USEDEFAULT,
 			nullptr,
@@ -178,106 +176,17 @@ struct SampleWindow : Window<SampleWindow>
 			m_target.ReleaseAndGetAddressOf()));
 
 		ComPtr<IDCompositionVisual2> rootVisual = CreateVisual();
-		m_pointerVisual = CreateVisual();
-		m_backgroundVisual = CreateVisual();
-
-		HR(rootVisual->AddVisual(m_backgroundVisual.Get(), false, nullptr));
-
-		HR(rootVisual->AddVisual(m_pointerVisual.Get(), false, nullptr));
 
 		HR(m_target->SetRoot(rootVisual.Get()));
 
-		ComPtr<IDCompositionSurface> surface = CreateSurface(1, 1);
-
-		ComPtr<ID2D1DeviceContext> dc;
-		POINT offset = {};
-
-		HR(surface->BeginDraw(nullptr,
-			__uuidof(dc),
-			reinterpret_cast<void **>(dc.GetAddressOf()),
-			&offset));
-
-		dc->Clear(ColorF(0.0f, 0.5f, 1.0f, 0.5f));
-
-		HR(surface->EndDraw());
-
-		HR(m_backgroundVisual->SetContent(surface.Get()));
-
-		ScaleBackground();
-
-		CreateDeviceScaleResources();
-
 		HR(m_device->Commit());
-	}
-
-	void ScaleBackground()
-	{
-		RECT rect = {};
-		VERIFY(GetClientRect(m_window, &rect));
-
-		HR(m_backgroundVisual->SetTransform(
-			Matrix3x2F::Scale(
-				static_cast<float>(rect.right),
-				static_cast<float>(rect.bottom))
-		));
-	}
-
-	void CreateDeviceScaleResources()
-	{
-		ComPtr<IDCompositionSurface> surface = CreateSurface(
-			LogicalToPhysical(100, m_dpiX),
-			LogicalToPhysical(100, m_dpiY));
-
-		HR(m_pointerVisual->SetContent(surface.Get()));
-
-		ComPtr<ID2D1DeviceContext> dc;
-		POINT offset = {};
-
-		HR(surface->BeginDraw(nullptr,
-			__uuidof(dc),
-			reinterpret_cast<void **>(dc.GetAddressOf()),
-			&offset));
-
-		dc->SetDpi(m_dpiX, m_dpiY);
-
-		dc->SetTransform(Matrix3x2F::Translation(
-			PhysicalToLogical(offset.x, m_dpiX),
-			PhysicalToLogical(offset.y, m_dpiY)));
-
-		dc->Clear();
-
-		ComPtr<ID2D1SolidColorBrush> brush;
-		D2D1_COLOR_F const color = ColorF(1.0f, 0.5f, 0.0f);
-
-		HR(dc->CreateSolidColorBrush(color,
-			brush.GetAddressOf()));
-
-		D2D1_ELLIPSE ellipse = Ellipse(Point2F(50.0f, 50.0f),
-			50.0f,
-			50.0f);
-
-		dc->FillEllipse(ellipse, brush.Get());
-
-		HR(surface->EndDraw());
 	}
 
 	LRESULT MessageHandler(UINT const message,
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_SIZE == message)
-		{
-			SizeHandler();
-		}
-		else if (WM_GETMINMAXINFO == message)
-		{
-			MinMaxHandler(lparam);
-		}
-		else if (WM_MOUSEMOVE == message)
-		{
-			MouseMoveHandler(lparam);
-		}
-		else if (WM_PAINT == message)
+		if (WM_PAINT == message)
 		{
 			PaintHandler();
 		}
@@ -289,6 +198,10 @@ struct SampleWindow : Window<SampleWindow>
 		{
 			CreateHandler();
 		}
+		else if (WM_WINDOWPOSCHANGING == message)
+		{
+			// Prevent window resizing due to device lost
+		}
 		else
 		{
 			return __super::MessageHandler(message, wparam, lparam);
@@ -297,94 +210,42 @@ struct SampleWindow : Window<SampleWindow>
 		return 0;
 	}
 
-	void MinMaxHandler(LPARAM const lparam)
-	{
-		MINMAXINFO * info = reinterpret_cast<MINMAXINFO*>(lparam);
-
-		info->ptMinTrackSize.y = info->ptMinTrackSize.x;
-	}
-
-	void SizeHandler()
-	{
-		try
-		{
-			if (!IsDeviceCreated())
-				return;
-
-			ScaleBackground();
-
-			HR(m_device->Commit());
-		}
-		catch (ComException const &e)
-		{
-			TRACE(L"SizeHandler failed 0x%X\n", e.result);
-
-			ReleaseDeviceResources();
-		}
-	}
-
-	void MouseMoveHandler(LPARAM const lparam)
-	{
-		try
-		{
-			if (!IsDeviceCreated())
-				return;
-
-			float x = LOWORD(lparam);
-			float y = HIWORD(lparam);
-
-			x -= LogicalToPhysical(50, m_dpiX);
-			y -= LogicalToPhysical(50, m_dpiY);
-
-			HR(m_pointerVisual->SetOffsetX(x));
-			HR(m_pointerVisual->SetOffsetY(y));
-
-			HR(m_device->Commit());
-		}
-		catch (ComException const &e)
-		{
-			TRACE(L"MouseMoveHandler failed 0x%X\n", e.result);
-
-			ReleaseDeviceResources();
-
-			VERIFY(InvalidateRect(m_window,
-				nullptr,
-				false));
-		}
-	}
-
 	void DpiChangedHandler(WPARAM const wparam, LPARAM const lparam)
 	{
-		try
+		m_dpiX = LOWORD(wparam);
+		m_dpiY = HIWORD(wparam);
+
+		RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
+
+		D2D1_SIZE_U const size = GetEffectiveWindowSize();
+
+		VERIFY(SetWindowPos(m_window,
+			nullptr,
+			suggested->left,
+			suggested->top,
+			size.width,
+			size.height,
+			SWP_NOACTIVATE | SWP_NOZORDER));
+
+		ReleaseDeviceResources();
+	}
+
+	D2D1_SIZE_U GetEffectiveWindowSize()
+	{
+		RECT rect =
 		{
-			m_dpiX = LOWORD(wparam);
-			m_dpiY = HIWORD(wparam);
+			0,
+			0,
+			static_cast<LONG>(LogicalToPhysical(WindowWidth, m_dpiX)),
+			static_cast<LONG>(LogicalToPhysical(WindowHeight, m_dpiY))
+		};
 
-			RECT const * suggested = reinterpret_cast<RECT const*>(lparam);
+		VERIFY(AdjustWindowRect(&rect,
+			GetWindowLong(m_window, GWL_STYLE),
+			false));
 
-			VERIFY(SetWindowPos(m_window,
-				nullptr,
-				suggested->left,
-				suggested->top,
-				suggested->right - suggested->left,
-				suggested->bottom - suggested->top,
-				SWP_NOACTIVATE | SWP_NOZORDER));
-
-			if (!IsDeviceCreated())
-				return;
-
-			CreateDeviceScaleResources();
-
-			HR(m_device->Commit());
-		}
-		catch (ComException const &e)
-		{
-			TRACE(L"DpiChangedHandler failed 0x%X\n", e.result);
-
-			ReleaseDeviceResources();
-
-			VERIFY(InvalidateRect(m_window, nullptr, false));
-		}
+		return SizeU(rect.right - rect.left,
+			rect.bottom - rect.top);
 	}
 
 	void CreateHandler()
@@ -400,23 +261,13 @@ struct SampleWindow : Window<SampleWindow>
 		m_dpiX = static_cast<float>(dpiX);
 		m_dpiY = static_cast<float>(dpiY);
 
-		RECT rect =
-		{
-			0,
-			0,
-			static_cast<LONG>(LogicalToPhysical(WindowWidth, m_dpiX)),
-			static_cast<LONG>(LogicalToPhysical(WindowHeight, m_dpiY))
-		};
-
-		VERIFY(AdjustWindowRect(&rect,
-			GetWindowLong(m_window, GWL_STYLE),
-			false));
+		D2D1_SIZE_U const size = GetEffectiveWindowSize();
 
 		VERIFY(SetWindowPos(m_window,
 			nullptr,
 			0, 0,
-			rect.right - rect.left,
-			rect.bottom - rect.top,
+			size.width,
+			size.height,
 			SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER));
 	}
 
@@ -424,6 +275,15 @@ struct SampleWindow : Window<SampleWindow>
 	{
 		try
 		{
+			RECT rect = {};
+			VERIFY(GetClientRect(m_window, &rect));
+
+			TRACE(L"Paint %d %d (%.2f %.2f)\n",
+				rect.right,
+				rect.bottom,
+				PhysicalToLogical(rect.right, m_dpiX),
+				PhysicalToLogical(rect.bottom, m_dpiY));
+
 			if (IsDeviceCreated())
 			{
 				HR(m_device3D->GetDeviceRemovedReason());

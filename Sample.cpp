@@ -3,11 +3,18 @@
 
 using namespace Microsoft::WRL;
 using namespace D2D1;
+using namespace std;
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
-static float const WindowWidth = 600.0f;
-static float const WindowHeight = 400.0f;
+static unsigned const CardRows = 3;
+static unsigned const CardColumns = 6;
+static float const CardMargin = 15.0f;
+static float const CardWidth = 150.0f;
+static float const CardHeight = 210.0f;
+
+static float const WindowWidth = CardColumns * (CardWidth + CardMargin) + CardMargin;
+static float const WindowHeight = CardRows * (CardHeight + CardMargin) + CardMargin;
 
 struct ComException
 {
@@ -39,11 +46,30 @@ static float LogicalToPhysical(T const pixel,
 	return pixel * dpi / 96.0f;
 }
 
+enum class CardStatus
+{
+	Hidden,
+	Selected,
+	Matched
+};
+
+struct Card
+{
+	CardStatus Status = CardStatus::Hidden;
+	wchar_t Value = L' ';
+	float OffsetX = 0.0f;
+	float OffsetY = 0.0f;
+};
+
 struct SampleWindow : Window<SampleWindow>
 {
 	// Device independent resources
 	float m_dpiX = 0.0f;
 	float m_dpiY = 0.0f;
+	ComPtr<IDWriteTextFormat> m_textFormat;
+
+	// Contains some device resources
+	array<Card, CardRows * CardColumns> m_cards;
 
 	// Device resources
 	ComPtr<ID3D11Device> m_device3D;
@@ -53,6 +79,71 @@ struct SampleWindow : Window<SampleWindow>
 	SampleWindow()
 	{
 		CreateDesktopWindow();
+		ShuffleCards();
+		CreateTextFormat();
+	}
+
+	void CreateTextFormat()
+	{
+		ComPtr<IDWriteFactory2> factory;
+
+		HR(DWriteCreateFactory(
+			DWRITE_FACTORY_TYPE_SHARED,
+			__uuidof(factory),
+			reinterpret_cast<IUnknown **>(factory.GetAddressOf())
+		));
+
+		HR(factory->CreateTextFormat(L"Candara",
+			nullptr,
+			DWRITE_FONT_WEIGHT_NORMAL,
+			DWRITE_FONT_STYLE_NORMAL,
+			DWRITE_FONT_STRETCH_NORMAL,
+			CardHeight / 2.0f,
+			L"en",
+			m_textFormat.GetAddressOf()));
+
+		HR(m_textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER));
+		HR(m_textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER));
+	}
+
+	void ShuffleCards()
+	{
+		random_device device;
+		mt19937 generator(device());
+		uniform_int_distribution<short> const distribution(L'A', L'Z');
+
+		array<wchar_t, CardRows * CardColumns> values;
+
+		for (unsigned i = 0; i != CardRows * CardColumns / 2; ++i)
+		{
+			wchar_t const value = distribution(generator);
+			values[i * 2 + 0] = value;
+			values[i * 2 + 1] = tolower(value);
+		}
+
+		shuffle(begin(values), end(values), generator);
+
+		for (unsigned i = 0; i != CardRows * CardColumns; ++i)
+		{
+			Card & card = m_cards[i];
+			card.Value = values[i];
+			card.Status = CardStatus::Hidden;
+		}
+
+#ifdef _DEBUG
+		for (unsigned row = 0; row != CardRows; ++row)
+		{
+			for (unsigned column = 0; column != CardColumns; ++column)
+			{
+				Card &card = m_cards[row * CardColumns + column];
+				TRACE(L"%c ", card.Value);
+			}
+
+			TRACE(L"\n");
+		}
+
+		TRACE(L"\n");
+#endif
 	}
 
 	void CreateDesktopWindow()
@@ -179,7 +270,77 @@ struct SampleWindow : Window<SampleWindow>
 
 		HR(m_target->SetRoot(rootVisual.Get()));
 
+		ComPtr<ID2D1DeviceContext> dc;
+
+		HR(device2D->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+			dc.GetAddressOf()));
+
+		D2D1_COLOR_F const color = ColorF(0.0f, 0.0f, 0.0f);
+
+		ComPtr<ID2D1SolidColorBrush> brush;
+
+		HR(dc->CreateSolidColorBrush(color, brush.GetAddressOf()));
+
+		float const width = LogicalToPhysical(CardWidth, m_dpiX);
+		float const height = LogicalToPhysical(CardHeight, m_dpiY);
+
+		for (unsigned row = 0; row != CardRows; ++row)
+			for (unsigned column = 0; column != CardColumns; ++column)
+			{
+				Card & card = m_cards[row * CardColumns + column];
+
+				card.OffsetX = LogicalToPhysical(column * (CardWidth + CardMargin) + CardMargin, m_dpiX);
+				card.OffsetY = LogicalToPhysical(row * (CardHeight + CardMargin) + CardMargin, m_dpiY);
+
+				ComPtr<IDCompositionVisual2> frontVisual = CreateVisual();
+				HR(frontVisual->SetOffsetX(card.OffsetX));
+				HR(frontVisual->SetOffsetY(card.OffsetY));
+
+				HR(rootVisual->AddVisual(frontVisual.Get(), false, nullptr));
+
+				ComPtr<IDCompositionVisual2> backVisual = CreateVisual();
+				HR(backVisual->SetOffsetX(card.OffsetX));
+				HR(backVisual->SetOffsetY(card.OffsetY));
+
+				HR(rootVisual->AddVisual(backVisual.Get(), false, nullptr));
+
+				ComPtr<IDCompositionSurface> frontSurface = CreateSurface(width, height);
+
+				HR(frontVisual->SetContent(frontSurface.Get()));
+
+				DrawCardFront(frontSurface, card.Value, brush);
+
+			}
+
 		HR(m_device->Commit());
+	}
+
+	void DrawCardFront(ComPtr<IDCompositionSurface> const & surface,
+		wchar_t const value,
+		ComPtr<ID2D1SolidColorBrush> brush)
+	{
+		ComPtr<ID2D1DeviceContext> dc;
+		POINT offset = {};
+
+		HR(surface->BeginDraw(nullptr,
+			__uuidof(dc),
+			reinterpret_cast<void **>(dc.GetAddressOf()),
+			&offset));
+
+		dc->SetDpi(m_dpiX, m_dpiY);
+
+		dc->SetTransform(Matrix3x2F::Translation(PhysicalToLogical(offset.x, m_dpiX),
+			PhysicalToLogical(offset.y, m_dpiY)));
+
+		dc->Clear(ColorF(1.0f, 1.0f, 1.0f));
+
+		dc->DrawText(&value,
+			1,
+			m_textFormat.Get(),
+			RectF(0.0f, 0.0f, CardWidth, CardHeight),
+			brush.Get());
+
+		HR(surface->EndDraw());
 	}
 
 	LRESULT MessageHandler(UINT const message,

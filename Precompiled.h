@@ -12,6 +12,7 @@
 #include <array>
 #include <random>
 #include <dwrite_2.h>
+#include <wincodec.h>
 
 #include "Debug.h"
 

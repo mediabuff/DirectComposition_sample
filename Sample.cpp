@@ -67,6 +67,7 @@ struct SampleWindow : Window<SampleWindow>
 	float m_dpiX = 0.0f;
 	float m_dpiY = 0.0f;
 	ComPtr<IDWriteTextFormat> m_textFormat;
+	ComPtr<IWICFormatConverter> m_image;
 
 	// Contains some device resources
 	array<Card, CardRows * CardColumns> m_cards;
@@ -81,6 +82,39 @@ struct SampleWindow : Window<SampleWindow>
 		CreateDesktopWindow();
 		ShuffleCards();
 		CreateTextFormat();
+		CreateImage();
+	}
+
+	void CreateImage()
+	{
+		ComPtr<IWICImagingFactory2> factory;
+
+		HR(CoCreateInstance(CLSID_WICImagingFactory,
+			nullptr,
+			CLSCTX_INPROC,
+			__uuidof(factory),
+			reinterpret_cast<void **>(factory.GetAddressOf())));
+
+		ComPtr<IWICBitmapDecoder> decoder;
+
+		HR(factory->CreateDecoderFromFilename(L"C:\\temp\\background.jpg",
+			nullptr,
+			GENERIC_READ,
+			WICDecodeMetadataCacheOnDemand,
+			decoder.GetAddressOf()));
+
+		ComPtr<IWICBitmapFrameDecode> source;
+
+		HR(decoder->GetFrame(0, source.GetAddressOf()));
+
+		HR(factory->CreateFormatConverter(m_image.GetAddressOf()));
+
+		HR(m_image->Initialize(source.Get(),
+			GUID_WICPixelFormat32bppBGR,
+			WICBitmapDitherTypeNone,
+			nullptr,
+			0.0,
+			WICBitmapPaletteTypeMedianCut));
 	}
 
 	void CreateTextFormat()
@@ -281,6 +315,10 @@ struct SampleWindow : Window<SampleWindow>
 
 		HR(dc->CreateSolidColorBrush(color, brush.GetAddressOf()));
 
+		ComPtr<ID2D1Bitmap1> bitmap;
+
+		HR(dc->CreateBitmapFromWicBitmap(m_image.Get(), bitmap.GetAddressOf()));
+
 		float const width = LogicalToPhysical(CardWidth, m_dpiX);
 		float const height = LogicalToPhysical(CardHeight, m_dpiY);
 
@@ -310,9 +348,50 @@ struct SampleWindow : Window<SampleWindow>
 
 				DrawCardFront(frontSurface, card.Value, brush);
 
+				ComPtr<IDCompositionSurface> backSurface = CreateSurface(width, height);
+
+				HR(backVisual->SetContent(backSurface.Get()));
+
+				DrawCardBack(backSurface, card.OffsetX, card.OffsetY, bitmap);
 			}
 
 		HR(m_device->Commit());
+	}
+
+	void DrawCardBack(ComPtr<IDCompositionSurface> const & surface,
+		float const offsetX,
+		float const offsetY,
+		ComPtr<ID2D1Bitmap1> const & bitmap)
+	{
+		ComPtr<ID2D1DeviceContext> dc;
+		POINT offset = {};
+
+		HR(surface->BeginDraw(nullptr,
+			__uuidof(dc),
+			reinterpret_cast<void **>(dc.GetAddressOf()),
+			&offset));
+
+		dc->SetDpi(m_dpiX, m_dpiY);
+
+		dc->SetTransform(Matrix3x2F::Translation(
+			PhysicalToLogical(offset.x, m_dpiX),
+			PhysicalToLogical(offset.y, m_dpiY)));
+
+		D2D1_RECT_F source = RectF(
+			PhysicalToLogical(offset.x, m_dpiX),
+			PhysicalToLogical(offset.y, m_dpiY));
+
+		source.right = source.left + CardWidth;
+		source.bottom = source.top + CardHeight;
+
+		dc->DrawBitmap(bitmap.Get(),
+			nullptr,
+			1.0f,
+			D2D1_INTERPOLATION_MODE_LINEAR,
+			&source);
+
+		HR(surface->EndDraw());
+
 	}
 
 	void DrawCardFront(ComPtr<IDCompositionSurface> const & surface,
@@ -480,6 +559,8 @@ int __stdcall wWinMain(HINSTANCE,
                        PWSTR, 
                        int)
 {
+	HR(CoInitializeEx(nullptr, COINITBASE_MULTITHREADED));
+
 	SampleWindow window;
 	MSG message;
 

@@ -68,6 +68,7 @@ struct SampleWindow : Window<SampleWindow>
 	float m_dpiY = 0.0f;
 	ComPtr<IDWriteTextFormat> m_textFormat;
 	ComPtr<IWICFormatConverter> m_image;
+	unsigned m_start = 0;
 
 	// Contains some device resources
 	array<Card, CardRows * CardColumns> m_cards;
@@ -76,6 +77,7 @@ struct SampleWindow : Window<SampleWindow>
 	ComPtr<ID3D11Device> m_device3D;
 	ComPtr<IDCompositionDevice> m_device;
 	ComPtr<IDCompositionTarget> m_target;
+	ComPtr<IDCompositionVisual2> m_rootVisual;
 
 	SampleWindow()
 	{
@@ -301,6 +303,7 @@ struct SampleWindow : Window<SampleWindow>
 			m_target.ReleaseAndGetAddressOf()));
 
 		ComPtr<IDCompositionVisual2> rootVisual = CreateVisual();
+		m_rootVisual = rootVisual;
 
 		HR(m_target->SetRoot(rootVisual.Get()));
 
@@ -426,7 +429,19 @@ struct SampleWindow : Window<SampleWindow>
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_PAINT == message)
+		if (WM_LBUTTONDOWN == message)
+		{
+			MouseDownHandler(lparam);
+		}
+		else if (WM_LBUTTONUP == message)
+		{
+			MouseUpHandler();
+		}
+		else if (WM_MOUSEMOVE == message)
+		{
+			MouseMoveHandler(wparam, lparam);
+		}
+		else if (WM_PAINT == message)
 		{
 			PaintHandler();
 		}
@@ -448,6 +463,46 @@ struct SampleWindow : Window<SampleWindow>
 		}
 
 		return 0;
+	}
+
+	void MouseDownHandler(LPARAM const lparam)
+	{
+		SetCapture(m_window);
+		m_start = LOWORD(lparam); // x-coord of the mouse position
+	}
+
+	void MouseUpHandler()
+	{
+		ReleaseCapture();
+	}
+
+	void MouseMoveHandler(WPARAM const wparam,
+		LPARAM const lparam)
+	{
+		if (0 == (wparam & MK_LBUTTON)) return;
+
+		float const angle = static_cast<float>(LOWORD(lparam)) - m_start;
+
+		TRACE(L"angle %.2f\n", angle);
+
+		float const width = LogicalToPhysical(WindowWidth, m_dpiX);
+		float const height = LogicalToPhysical(WindowHeight, m_dpiY);
+
+		D2D1_MATRIX_4X4_F const matrix =
+			Matrix4x4F::Translation(-width / 2.0f, -height / 2.0f, 0.0f) *
+			Matrix4x4F::RotationY(angle) *
+			Matrix4x4F::PerspectiveProjection(width * 2.0f) *
+			Matrix4x4F::Translation(width / 2.0f, height / 2.0f, 0.0f)
+			;
+
+		ComPtr<IDCompositionMatrixTransform3D> transform;
+		HR(m_device->CreateMatrixTransform3D(transform.GetAddressOf()));
+
+		HR(transform->SetMatrix(reinterpret_cast<D3DMATRIX const &>(matrix)));
+
+		HR(m_rootVisual->SetEffect(transform.Get()));
+
+		HR(m_device->Commit());
 	}
 
 	void DpiChangedHandler(WPARAM const wparam, LPARAM const lparam)

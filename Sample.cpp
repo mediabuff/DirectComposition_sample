@@ -69,6 +69,7 @@ struct SampleWindow : Window<SampleWindow>
 	ComPtr<IDWriteTextFormat> m_textFormat;
 	ComPtr<IWICFormatConverter> m_image;
 	unsigned m_start = 0;
+	bool m_shiftPressed = 0;
 
 	// Contains some device resources
 	array<Card, CardRows * CardColumns> m_cards;
@@ -441,6 +442,14 @@ struct SampleWindow : Window<SampleWindow>
 		{
 			MouseMoveHandler(wparam, lparam);
 		}
+		else if (WM_KEYDOWN == message)
+		{
+			KeyDownHandler(wparam, lparam);
+		}
+		else if (WM_KEYUP == message)
+		{
+			KeyUpHandler(wparam, lparam);
+		}
 		else if (WM_PAINT == message)
 		{
 			PaintHandler();
@@ -464,6 +473,23 @@ struct SampleWindow : Window<SampleWindow>
 
 		return 0;
 	}
+	void KeyDownHandler(WPARAM const wparam, LPARAM const lparam)
+	{
+		if ((!m_shiftPressed) && (wparam & VK_SHIFT))
+		{
+			m_shiftPressed = 1;
+			//TRACE(L"Shift down\n");
+		}
+	}
+
+	void KeyUpHandler(WPARAM const wparam, LPARAM const lparam)
+	{
+		if ((m_shiftPressed) && (wparam & VK_SHIFT))
+		{
+			m_shiftPressed = 0;
+			//TRACE(L"Shift up\n");
+		}
+	}
 
 	void MouseDownHandler(LPARAM const lparam)
 	{
@@ -483,24 +509,41 @@ struct SampleWindow : Window<SampleWindow>
 
 		float const angle = static_cast<float>(LOWORD(lparam)) - m_start;
 
-		TRACE(L"angle %.2f\n", angle);
+		TRACE(L"angle %.2f, shift %d\n", angle, m_shiftPressed);
 
 		float const width = LogicalToPhysical(WindowWidth, m_dpiX);
 		float const height = LogicalToPhysical(WindowHeight, m_dpiY);
 
-		D2D1_MATRIX_4X4_F const matrix =
-			Matrix4x4F::Translation(-width / 2.0f, -height / 2.0f, 0.0f) *
-			Matrix4x4F::RotationY(angle) *
-			Matrix4x4F::PerspectiveProjection(width * 2.0f) *
-			Matrix4x4F::Translation(width / 2.0f, height / 2.0f, 0.0f)
-			;
+		if (m_shiftPressed == 0)
+		{
+			D2D1_POINT_2F center
+			{
+				width / 2.0f,
+				height / 2.0f
+			};
 
-		ComPtr<IDCompositionMatrixTransform3D> transform;
-		HR(m_device->CreateMatrixTransform3D(transform.GetAddressOf()));
+			D2D1_MATRIX_3X2_F const matrix = Matrix3x2F::Rotation(angle, center);
+			
+			HR(m_rootVisual->SetTransform(matrix));
 
-		HR(transform->SetMatrix(reinterpret_cast<D3DMATRIX const &>(matrix)));
+			HR(m_device->Commit());
+		}
+		else
+		{
+			D2D1_MATRIX_4X4_F const matrix =
+				Matrix4x4F::Translation(-width / 2.0f, -height / 2.0f, 0.0f) *
+				Matrix4x4F::RotationY(angle) *
+				Matrix4x4F::PerspectiveProjection(width * 2.0f) *
+				Matrix4x4F::Translation(width / 2.0f, height / 2.0f, 0.0f)
+				;
 
-		HR(m_rootVisual->SetEffect(transform.Get()));
+			ComPtr<IDCompositionMatrixTransform3D> transform;
+			HR(m_device->CreateMatrixTransform3D(transform.GetAddressOf()));
+
+			HR(transform->SetMatrix(reinterpret_cast<D3DMATRIX const &>(matrix)));
+
+			HR(m_rootVisual->SetEffect(transform.Get()));
+		}
 
 		HR(m_device->Commit());
 	}

@@ -13,6 +13,7 @@
 #include <random>
 #include <dwrite_2.h>
 #include <wincodec.h>
+#include <UIAnimation.h>
 
 #include "Debug.h"
 

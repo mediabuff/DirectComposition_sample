@@ -55,10 +55,15 @@ enum class CardStatus
 
 struct Card
 {
+	// Device independed resources
 	CardStatus Status = CardStatus::Hidden;
 	wchar_t Value = L' ';
 	float OffsetX = 0.0f;
 	float OffsetY = 0.0f;
+	ComPtr<IUIAnimationVariable2> Variable;
+
+	// Device resources
+	ComPtr<IDCompositionRotateTransform3D> Rotation;
 };
 
 struct SampleWindow : Window<SampleWindow>
@@ -68,6 +73,9 @@ struct SampleWindow : Window<SampleWindow>
 	float m_dpiY = 0.0f;
 	ComPtr<IDWriteTextFormat> m_textFormat;
 	ComPtr<IWICFormatConverter> m_image;
+	ComPtr<IUIAnimationManager2> m_manager;
+	ComPtr<IUIAnimationTransitionLibrary2> m_library;
+	Card * m_firstCard = nullptr;
 
 	// Contains some device resources
 	array<Card, CardRows * CardColumns> m_cards;
@@ -83,6 +91,27 @@ struct SampleWindow : Window<SampleWindow>
 		ShuffleCards();
 		CreateTextFormat();
 		CreateImage();
+		PrepareAnimationManager();
+	}
+
+	void PrepareAnimationManager()
+	{
+		HR(CoCreateInstance(__uuidof(UIAnimationManager2),
+			nullptr,
+			CLSCTX_INPROC,
+			__uuidof(m_manager),
+			reinterpret_cast<void**>(m_manager.GetAddressOf())));
+
+		HR(CoCreateInstance(__uuidof(UIAnimationTransitionLibrary2),
+			nullptr,
+			CLSCTX_INPROC,
+			__uuidof(m_library),
+			reinterpret_cast<void **>(m_library.GetAddressOf())));
+
+		for (Card & card : m_cards)
+		{
+			HR(m_manager->CreateAnimationVariable(0.0, card.Variable.GetAddressOf()));
+		}
 	}
 
 	void CreateImage()
@@ -330,6 +359,8 @@ struct SampleWindow : Window<SampleWindow>
 				card.OffsetX = LogicalToPhysical(column * (CardWidth + CardMargin) + CardMargin, m_dpiX);
 				card.OffsetY = LogicalToPhysical(row * (CardHeight + CardMargin) + CardMargin, m_dpiY);
 
+				if (card.Status == CardStatus::Matched) continue;
+
 				ComPtr<IDCompositionVisual2> frontVisual = CreateVisual();
 				HR(frontVisual->SetOffsetX(card.OffsetX));
 				HR(frontVisual->SetOffsetY(card.OffsetY));
@@ -353,18 +384,62 @@ struct SampleWindow : Window<SampleWindow>
 				HR(backVisual->SetContent(backSurface.Get()));
 
 				DrawCardBack(backSurface, card.OffsetX, card.OffsetY, bitmap);
+
+				HR(m_device->CreateRotateTransform3D(card.Rotation.ReleaseAndGetAddressOf()));
+
+				if (card.Status == CardStatus::Selected)
+				{
+					HR(card.Rotation->SetAngle(180.0f));
+				}
+
+				HR(card.Rotation->SetAxisZ(0.0f));
+				HR(card.Rotation->SetAxisY(1.0f));
+
+				CreateEffect(fontVisual, card.Rotation, true);
+				CreateEffect(backVisual, card.Rotation, false);
 			}
 
-		ComPtr<IDCompositionAnimation> animation;
-		HR(m_device->CreateAnimation(animation.GetAddressOf()));
-
-		HR(animation->AddCubic(0.0, -WindowHeight, WindowHeight, -WindowHeight / 4.0f, 0.0f));
-
-		HR(animation->End(2.0, 0.0f));
-
-		HR(rootVisual->SetOffsetY(animation.Get()));
-
 		HR(m_device->Commit());
+	}
+
+	void CreateEffect(ComPtr<IDCompositionVisual2> const & visual,
+		ComPtr<IDCompositionRotateTransform3D> const & rotation,
+		bool const front)
+	{
+		float const width = LogicalToPhysical(CardWidth, m_dpiX);
+		float const height = LogicalToPhysical(CardHeight, m_dpiY);
+
+		ComPtr<IDCompositionMatrixTransform3D> pre;
+		HR(m_device->CreateMatrixTransform3D(pre.GetAddressOf()));
+
+		D2D1_MATRIX_4X4_F preMatrix = Matrix4x4F::Translation(-width / 2.0f, -height / 2.0f, 0.0f) *
+			Matrix4x4F::RotationY(front ? 180.0f : 0.0f);
+
+		HR(pre->SetMatrix(reinterpret_cast<D3DMATRIX const &>(preMatrix)));
+
+		ComPtr<IDCompositionMatrixTransform3D> post;
+		HR(m_device->CreateMatrixTransform3D(post.GetAddressOf()));
+
+		D2D1_MATRIX_4X4_F postMartix =
+			Matrix4x4F::PerspectiveProjection(width * 2.0f) *
+			Matrix4x4F::Translation(width / 2.0f, height / 2.0f, 0.0f);
+
+		HR(post->SetMatrix(reinterpret_cast<D3DMATRIX const &>(postMartix)));
+
+		IDCompositionTransform3D * transforms[] =
+		{
+			pre.Get(),
+			rotation.Get(),
+			post.Get()
+		};
+
+		ComPtr<IDCompositionTransform3D> transform;
+
+		HR(m_device->CreateTransform3DGroup(transforms,
+			_countof(transforms),
+			transform.GetAddressOf()));
+
+		HR(visual->SetEffect(transform.Get()));
 	}
 
 	void DrawCardBack(ComPtr<IDCompositionSurface> const & surface,

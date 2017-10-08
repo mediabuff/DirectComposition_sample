@@ -395,7 +395,7 @@ struct SampleWindow : Window<SampleWindow>
 				HR(card.Rotation->SetAxisZ(0.0f));
 				HR(card.Rotation->SetAxisY(1.0f));
 
-				CreateEffect(fontVisual, card.Rotation, true);
+				CreateEffect(frontVisual, card.Rotation, true);
 				CreateEffect(backVisual, card.Rotation, false);
 			}
 
@@ -510,7 +510,11 @@ struct SampleWindow : Window<SampleWindow>
 		WPARAM const wparam,
 		LPARAM const lparam)
 	{
-		if (WM_PAINT == message)
+		if (WM_LBUTTONUP == message)
+		{
+			LeftButtonUpHandler(lparam);
+		}
+		else if (WM_PAINT == message)
 		{
 			PaintHandler();
 		}
@@ -532,6 +536,86 @@ struct SampleWindow : Window<SampleWindow>
 		}
 
 		return 0;
+	}
+
+	Card * CardAtPoint(LPARAM const lparam)
+	{
+		float const x = static_cast<float>(LOWORD(lparam));
+		float const y = static_cast<float>(HIWORD(lparam));
+
+		float const width = LogicalToPhysical(CardWidth, m_dpiX);
+		float const height = LogicalToPhysical(CardHeight, m_dpiY);
+
+		//TRACE(L"CAP: x = %f, y = %f, width = %f, height = %f\n", x, y, width, height);
+
+		for (Card &card : m_cards)
+		{
+			if (x > card.OffsetX &&
+				y > card.OffsetY &&
+				x < (card.OffsetX + width) &&
+				y < (card.OffsetY + height))
+			{
+				return &card;
+			}
+		}
+
+		return nullptr;
+	}
+
+	bool IsMatch(wchar_t const first, wchar_t const second)
+	{
+		int const expected = 'a' - 'A';
+
+		int const actual = abs(first - second);
+
+		return expected == actual;
+	}
+
+	void LeftButtonUpHandler(LPARAM const lparam)
+	{
+		try
+		{
+			Card *nextCard = CardAtPoint(lparam);
+
+			if (!nextCard) return;
+
+			if (nextCard == m_firstCard) return;
+
+			if (nextCard->Status == CardStatus::Matched) return;
+
+			if (!m_firstCard)
+			{
+				m_firstCard = nextCard;
+				nextCard->Status == CardStatus::Selected;
+
+				TRACE(L"first card: %c\n", m_firstCard->Value);
+			}
+			else
+			{
+				m_firstCard->Status = CardStatus::Hidden;
+
+				if (IsMatch(m_firstCard->Value, nextCard->Value))
+				{
+					m_firstCard->Status = nextCard->Status = CardStatus::Matched;
+
+					TRACE(L"match %c = %c\n", m_firstCard->Value, nextCard->Value);
+				}
+				else
+				{
+					TRACE(L"mismatch %c != %c\n", m_firstCard->Value, nextCard->Value);
+				}
+
+				m_firstCard = nullptr;
+			}
+		}
+		catch (ComException const &e)
+		{
+			TRACE(L"LeftButtonUpHandler failed 0x%X\n", e.result);
+
+			ReleaseDeviceResources();
+
+			VERIFY(InvalidateRect(m_window, nullptr, false));
+		}
 	}
 
 	void DpiChangedHandler(WPARAM const wparam, LPARAM const lparam)

@@ -82,7 +82,8 @@ struct SampleWindow : Window<SampleWindow>
 
 	// Device resources
 	ComPtr<ID3D11Device> m_device3D;
-	ComPtr<IDCompositionDevice> m_device;
+	//ComPtr<IDCompositionDevice2> m_device;
+	ComPtr<IDCompositionDesktopDevice> m_device;
 	ComPtr<IDCompositionTarget> m_target;
 
 	SampleWindow()
@@ -292,7 +293,10 @@ struct SampleWindow : Window<SampleWindow>
 		ComPtr<IDCompositionVisual2> visual;
 
 		//HR(m_device->CreateVisual(reinterpret_cast<IDCompositionVisual**>(visual.GetAddressOf())));
-		HR(m_device->CreateVisual((IDCompositionVisual**)visual.GetAddressOf()));
+		//HR(m_device->CreateVisual((IDCompositionVisual**)visual.GetAddressOf()));
+		HR(m_device->CreateVisual(visual.GetAddressOf()));
+
+		HR(visual->SetBackFaceVisibility(DCOMPOSITION_BACKFACE_VISIBILITY_HIDDEN));
 
 		return visual;
 	}
@@ -480,7 +484,7 @@ struct SampleWindow : Window<SampleWindow>
 
 	void DrawCardFront(ComPtr<IDCompositionSurface> const & surface,
 		wchar_t const value,
-		ComPtr<ID2D1SolidColorBrush> brush)
+		ComPtr<ID2D1SolidColorBrush> const & brush)
 	{
 		ComPtr<ID2D1DeviceContext> dc;
 		POINT offset = {};
@@ -546,8 +550,6 @@ struct SampleWindow : Window<SampleWindow>
 		float const width = LogicalToPhysical(CardWidth, m_dpiX);
 		float const height = LogicalToPhysical(CardHeight, m_dpiY);
 
-		//TRACE(L"CAP: x = %f, y = %f, width = %f, height = %f\n", x, y, width, height);
-
 		for (Card &card : m_cards)
 		{
 			if (x > card.OffsetX &&
@@ -571,6 +573,60 @@ struct SampleWindow : Window<SampleWindow>
 		return expected == actual;
 	}
 
+	ComPtr<IUIAnimationTransition2> CreateTransition(double const duration,
+		double const finalValue)
+	{
+		ComPtr<IUIAnimationTransition2> transition;
+
+		HR(m_library->CreateAccelerateDecelerateTransition(duration,
+			finalValue,
+			0.2, 0.8,
+			transition.GetAddressOf()));
+
+		return transition;
+	}
+
+	UI_ANIMATION_KEYFRAME AddShowTransition(Card const &card,
+		ComPtr<IUIAnimationStoryboard2> const & storyboard)
+	{
+		double angle = 0.0;
+		HR(card.Variable->GetValue(&angle));
+
+		double const duration = (180.0 - angle) / 180.0;
+
+		ComPtr<IUIAnimationTransition2> transition = CreateTransition(duration, 180.0);
+
+		HR(storyboard->AddTransition(card.Variable.Get(), transition.Get()));
+
+		UI_ANIMATION_KEYFRAME keyframe = nullptr;
+
+		HR(storyboard->AddKeyframeAfterTransition(
+			transition.Get(),
+			&keyframe));
+
+		return keyframe;
+	}
+
+	void AddHideTransition(Card const &card,
+		ComPtr<IUIAnimationStoryboard2> const & storyboard,
+		UI_ANIMATION_KEYFRAME keyframe,
+		double const finalValue)
+	{
+		ComPtr<IUIAnimationTransition2> transition = CreateTransition(1.0, finalValue);
+		HR(storyboard->AddTransitionAtKeyframe(
+			card.Variable.Get(),
+			transition.Get(),
+			keyframe));
+	}
+
+	void UpdateAnimation(Card const &card)
+	{
+		ComPtr<IDCompositionAnimation> animation;
+		HR(m_device->CreateAnimation(animation.GetAddressOf()));
+		HR(card.Variable->GetCurve(animation.Get()));
+		HR(card.Rotation->SetAngle(animation.Get()));
+	}
+
 	void LeftButtonUpHandler(LPARAM const lparam)
 	{
 		try
@@ -583,12 +639,24 @@ struct SampleWindow : Window<SampleWindow>
 
 			if (nextCard->Status == CardStatus::Matched) return;
 
+			DCOMPOSITION_FRAME_STATISTICS stats = {};
+			HR(m_device->GetFrameStatistics(&stats));
+
+			double const next = static_cast<double>(stats.nextEstimatedFrameTime.QuadPart) / stats.timeFrequency.QuadPart;
+
+			HR(m_manager->Update(next));
+
+			ComPtr<IUIAnimationStoryboard2> storyboard;
+			HR(m_manager->CreateStoryboard(storyboard.GetAddressOf()));
+
 			if (!m_firstCard)
 			{
 				m_firstCard = nextCard;
-				nextCard->Status == CardStatus::Selected;
+				nextCard->Status = CardStatus::Selected;
 
-				TRACE(L"first card: %c\n", m_firstCard->Value);
+				AddShowTransition(*nextCard, storyboard);
+				HR(storyboard->Schedule(next));
+				UpdateAnimation(*nextCard);
 			}
 			else
 			{
@@ -598,15 +666,29 @@ struct SampleWindow : Window<SampleWindow>
 				{
 					m_firstCard->Status = nextCard->Status = CardStatus::Matched;
 
-					TRACE(L"match %c = %c\n", m_firstCard->Value, nextCard->Value);
+					UI_ANIMATION_KEYFRAME keyframe = AddShowTransition(*nextCard, storyboard);
+
+					AddHideTransition(*m_firstCard, storyboard, keyframe, 90.0);
+
+					AddHideTransition(*nextCard, storyboard, keyframe, 90.0);
 				}
 				else
 				{
-					TRACE(L"mismatch %c != %c\n", m_firstCard->Value, nextCard->Value);
+					UI_ANIMATION_KEYFRAME keyframe = AddShowTransition(*nextCard, storyboard);
+
+					AddHideTransition(*m_firstCard, storyboard, keyframe, 0.0);
+
+					AddHideTransition(*nextCard, storyboard, keyframe, 0.0);
 				}
+
+				HR(storyboard->Schedule(next));
+				UpdateAnimation(*m_firstCard);
+				UpdateAnimation(*nextCard);
 
 				m_firstCard = nullptr;
 			}
+
+			HR(m_device->Commit());
 		}
 		catch (ComException const &e)
 		{
@@ -644,8 +726,8 @@ struct SampleWindow : Window<SampleWindow>
 		{
 			0,
 			0,
-			static_cast<LONG>(LogicalToPhysical(WindowWidth, m_dpiX)),
-			static_cast<LONG>(LogicalToPhysical(WindowHeight, m_dpiY))
+			static_cast<unsigned>(LogicalToPhysical(WindowWidth, m_dpiX)),
+			static_cast<unsigned>(LogicalToPhysical(WindowHeight, m_dpiY))
 		};
 
 		VERIFY(AdjustWindowRect(&rect,
@@ -712,14 +794,6 @@ struct SampleWindow : Window<SampleWindow>
 		}
 	}
 
-	void EraseBackgroundHandler(WPARAM const wparam)
-	{
-		RECT rect = {};
-		VERIFY(GetClientRect(m_window, &rect));
-
-		HBRUSH const brush = static_cast<HBRUSH>(GetStockObject(LTGRAY_BRUSH));
-		VERIFY(FillRect(reinterpret_cast<HDC>(wparam), &rect, brush));
-	}
 };
 
 int __stdcall wWinMain(HINSTANCE, 
